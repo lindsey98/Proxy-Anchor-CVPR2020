@@ -45,7 +45,7 @@ parser.add_argument('--epochs', default = 60, type = int,
     help = 'Number of training epochs.'
 )
 parser.add_argument('--gpu-id', default = 0, type = int,
-    help = 'ID of GPU that is used for training.'
+    help = 'ID of GPU that is used for training. -1 means use all'
 )
 parser.add_argument('--workers', default = 4, type = int,
     dest = 'nb_workers',
