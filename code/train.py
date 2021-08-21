@@ -30,7 +30,7 @@ parser.add_argument('--LOG_DIR',
 )
 parser.add_argument('--dataset', 
     default='cub',
-    help = 'Training dataset, e.g. cub, cars, SOP, Inshop'
+    help = 'Training dataset, e.g. cub, cars, SOP, Inshop, logo2k'
 )
 parser.add_argument('--embedding-size', default = 512, type = int,
     dest = 'sz_embedding',
