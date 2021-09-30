@@ -17,16 +17,36 @@ def l2_norm(input):
 
     return output
 
+def assign_by_euclidian_at_k(X, T, k):
+    """
+        X : [nb_samples x nb_features], e.g. 100 x 64 (embeddings)
+        k : for each sample, assign target labels of k nearest points
+    """
+    # distances = sklearn.metrics.pairwise.pairwise_distances(X)
+    chunk_size = 1000
+    num_chunks = math.ceil(len(X)/chunk_size)
+    distances = torch.tensor([])
+    for i in tqdm(range(0, num_chunks)):
+        chunk_indices = [chunk_size*i, min(len(X), chunk_size*(i+1))]
+        chunk_X = X[chunk_indices[0]:chunk_indices[1], :]
+        distance_mat = torch.from_numpy(sklearn.metrics.pairwise.pairwise_distances(X, chunk_X))
+        distances = torch.cat((distances, distance_mat), dim=-1)
+    assert distances.shape[0] == len(X)
+    assert distances.shape[1] == len(X)
+
+    distances = distances.numpy()
+    # get nearest points
+    indices = np.argsort(distances, axis = 1)[:, 1 : k + 1]
+
+    return np.array([[T[i] for i in ii] for ii in indices])
+
 def calc_recall_at_k(T, Y, k):
     """
-    T : [nb_samples] (target labels)
-    Y : [nb_samples x k] (k predicted labels/neighbours)
+        Check whether a sample's KNN contain any sample with the same class labels as itself
+        T : [nb_samples] (target labels)
+        Y : [nb_samples x k] (k predicted labels/neighbours)
     """
-
-    s = 0
-    for t,y in zip(T,Y):
-        if t in torch.Tensor(y).long()[:k]:
-            s += 1
+    s = sum([1 for t, y in zip(T, Y) if t in y[:k]])
     return s / (1. * len(T))
 
 
@@ -71,16 +91,25 @@ def evaluate_cos(model, dataloader):
     X = l2_norm(X)
 
     # get predictions by assigning nearest 8 neighbors with cosine
-    K = 32
-    Y = []
-    xs = []
-    
-    cos_sim = F.linear(X, X)
-    Y = T[cos_sim.topk(1 + K)[1][:,1:]]
-    Y = Y.float().cpu()
-    
+    # K = 32
+    # Y = []
+    # xs = []
+    # cos_sim = F.linear(X, X)
+    # Y = T[cos_sim.topk(1 + K)[1][:,1:]]
+    # Y = Y.float().cpu()
+    #
+    # recall = []
+    # for k in [1, 2, 4, 8, 16, 32]:
+    #     r_at_k = calc_recall_at_k(T, Y, k)
+    #     recall.append(r_at_k)
+    #     print("R@{} : {:.3f}".format(k, 100 * r_at_k))
+    max_dist = max([1,2,4,8])
+    Y = assign_by_euclidian_at_k(X, T, max_dist)
+    Y = torch.from_numpy(Y)
+
+    # calculate recall @ 1, 2, 4, 8
     recall = []
-    for k in [1, 2, 4, 8, 16, 32]:
+    for k in [1,2,4,8]:
         r_at_k = calc_recall_at_k(T, Y, k)
         recall.append(r_at_k)
         print("R@{} : {:.3f}".format(k, 100 * r_at_k))
