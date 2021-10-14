@@ -28,7 +28,7 @@ parser = argparse.ArgumentParser(description=
 parser.add_argument('--batch-size', default = 150, type = int,dest = 'sz_batch',help = 'Number of samples per batch.')
 parser.add_argument('--epochs', default = 60, type = int,dest = 'nb_epochs',help = 'Number of training epochs.')
 parser.add_argument('--workers', default = 4, type = int,dest = 'nb_workers',help = 'Number of workers for dataloader.')
-parser.add_argument('--optimizer', default = 'adamw',help = 'Optimizer setting')
+parser.add_argument('--optimizer', default = 'adam',help = 'Optimizer setting')
 parser.add_argument('--weight-decay', default = 1e-4, type =float, help = 'Weight decay setting')
 parser.add_argument('--lr-decay-step', default = 10, type =int,help = 'Learning decay step setting')
 parser.add_argument('--lr-decay-gamma', default = 0.5, type =float,help = 'Learning decay gamma setting')
@@ -43,11 +43,11 @@ parser.add_argument('--LOG_DIR', default='../logs', help = 'Path to log folder')
 
 
 parser.add_argument('--dataset', default='logo2k_super100', help = 'Training dataset, e.g. cub, cars, SOP, Inshop, logo2k')
-parser.add_argument('--embedding-size', default = 2048, type = int,dest = 'sz_embedding',help = 'Size of embedding that is appended to backbone model.')
-parser.add_argument('--model', default = 'resnet50',help = 'Model for training')
-parser.add_argument('--loss', default = 'Proxy_Anchor',help = 'Criterion for training')
-parser.add_argument('--gpu-id', default = 0, type = int,help = 'ID of GPU that is used for training. -1 means use all')
-parser.add_argument('--lr', default = 1e-4, type =float,help = 'Learning rate setting')
+parser.add_argument('--embedding-size', default = 2048, type = int, dest = 'sz_embedding',help = 'Size of embedding that is appended to backbone model.')
+parser.add_argument('--model', default = 'resnet50', help = 'Model for training')
+parser.add_argument('--loss', default = 'Proxy_Anchor', help = 'Criterion for training')
+parser.add_argument('--gpu-id', default = 0, type = int, help = 'ID of GPU that is used for training. -1 means use all')
+parser.add_argument('--lr', default = 1e-5, type =float, help = 'Learning rate setting')
 
 args = parser.parse_args()
 
@@ -58,8 +58,8 @@ if args.gpu_id != -1:
 LOG_DIR = args.LOG_DIR + '/logs_{}/{}_{}_embedding{}_alpha{}_mrg{}_{}_lr{}_batch{}{}'.format(args.dataset, args.model, args.loss, args.sz_embedding, args.alpha, 
                                                                                             args.mrg, args.optimizer, args.lr, args.sz_batch, args.remark)
 # Wandb Initialization
-wandb.init(project=args.dataset + '_ProxyAnchor', notes=LOG_DIR)
-wandb.config.update(args)
+# wandb.init(project=args.dataset + '_ProxyAnchor', notes=LOG_DIR)
+# wandb.config.update(args)
 
 # os.chdir('../data/')
 data_root = '/home/ruofan/PycharmProjects/ProxyNCA-/mnt/datasets/logo2ksuperclass0.01'
@@ -71,7 +71,7 @@ if args.dataset != 'Inshop':
             mode = 'train',
             transform = dataset.utils.make_transform(
                 is_train = True, 
-                is_inception = (args.model == 'bn_inception')
+                is_inception = False
             ))
 else:
     trn_dataset = Inshop_Dataset(
@@ -79,7 +79,7 @@ else:
             mode = 'train',
             transform = dataset.utils.make_transform(
                 is_train = True, 
-                is_inception = (args.model == 'bn_inception')
+                is_inception = False
             ))
 
 if args.IPC:
@@ -156,6 +156,7 @@ else:
     )
 
 nb_classes = trn_dataset.nb_classes()
+print(nb_classes)
 print(len(dl_tr.dataset))
 print(len(dl_ev.dataset))
 
@@ -197,6 +198,7 @@ param_groups = [
 ]
 if args.loss == 'Proxy_Anchor':
     param_groups.append({'params': criterion.proxies, 'lr':float(args.lr) * 100})
+print(param_groups[-1]['lr'])
 
 # Optimizer Setting
 if args.optimizer == 'sgd': 
@@ -213,7 +215,7 @@ scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=args.lr_decay_step, g
 print("Training parameters: {}".format(vars(args)))
 print("Training for {} epochs.".format(args.nb_epochs))
 losses_list = []
-best_recall=[0]
+best_recall=[0]*9
 best_epoch = 0
 
 for epoch in range(0, args.nb_epochs):
@@ -241,6 +243,15 @@ for epoch in range(0, args.nb_epochs):
             for param in list(set(model.parameters()).difference(set(unfreeze_model_param))):
                 param.requires_grad = True
 
+    # with torch.no_grad():
+    #     print("**Initial evaluating...**")
+    #     if args.dataset == 'Inshop':
+    #         Recalls = utils.evaluate_cos_Inshop(model, dl_query, dl_gallery)
+    #     elif args.dataset != 'SOP':
+    #         Recalls = utils.evaluate_cos(model, dl_ev)
+    #     else:
+    #         Recalls = utils.evaluate_cos_SOP(model, dl_ev)
+
     pbar = tqdm(enumerate(dl_tr))
 
     for batch_idx, (x, y) in pbar:                         
@@ -264,7 +275,8 @@ for epoch in range(0, args.nb_epochs):
                 loss.item()))
         
     losses_list.append(np.mean(losses_per_epoch))
-    wandb.log({'loss': losses_list[-1]}, step=epoch)
+    # wandb.log({'loss': losses_list[-1]}, step=epoch)
+    print('loss'.format(losses_list[-1]))
     scheduler.step()
     
     if(epoch >= 0):
@@ -280,16 +292,21 @@ for epoch in range(0, args.nb_epochs):
         # Logging Evaluation Score
         if args.dataset == 'Inshop':
             for i, K in enumerate([1,10,20,30,40,50]):    
-                wandb.log({"R@{}".format(K): Recalls[i]}, step=epoch)
+                # wandb.log({"R@{}".format(K): Recalls[i]}, step=epoch)
+                print("R@{}: {}".format(K, Recalls[i]))
         elif args.dataset != 'SOP':
-            for i in range(6):
-                wandb.log({"R@{}".format(2**i): Recalls[i]}, step=epoch)
+            for i in [1,2,4,8]:
+                # wandb.log({"R@{}".format(i): Recalls[i]}, step=epoch)
+                print("R@{}: {}".format(i, Recalls[i]))
+
         else:
-            for i in range(4):
-                wandb.log({"R@{}".format(10**i): Recalls[i]}, step=epoch)
+            for i in [1,2,4,8]:
+                # wandb.log({"R@{}".format(i): Recalls[i]}, step=epoch)
+                print("R@{}: {}".format(i, Recalls[i]))
+
         
         # Best model save
-        if best_recall[0] < Recalls[0]:
+        if best_recall[1] < Recalls[1]:
             best_recall = Recalls
             best_epoch = epoch
             if not os.path.exists('{}'.format(LOG_DIR)):
@@ -300,11 +317,17 @@ for epoch in range(0, args.nb_epochs):
                 if args.dataset == 'Inshop':
                     for i, K in enumerate([1,10,20,30,40,50]):    
                         f.write("Best Recall@{}: {:.4f}\n".format(K, best_recall[i] * 100))
+                        print("R@{}: {}".format(K, best_recall[i]))
+
                 elif args.dataset != 'SOP':
-                    for i in range(6):
-                        f.write("Best Recall@{}: {:.4f}\n".format(2**i, best_recall[i] * 100))
+                    for i in [1,2,4,8]:
+                        f.write("Best Recall@{}: {:.4f}\n".format(i, best_recall[i] * 100))
+                        print("R@{}: {}".format(i, best_recall[i]))
+
                 else:
-                    for i in range(4):
-                        f.write("Best Recall@{}: {:.4f}\n".format(10**i, best_recall[i] * 100))
+                    for i in [1,2,4,8]:
+                        f.write("Best Recall@{}: {:.4f}\n".format(i, best_recall[i] * 100))
+                        print("R@{}: {}".format(i, best_recall[i]))
+
 
     

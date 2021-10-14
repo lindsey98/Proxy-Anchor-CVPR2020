@@ -6,6 +6,9 @@ import json
 from tqdm import tqdm
 import torch.nn.functional as F
 import math
+import sklearn.metrics
+import faiss
+from typing import List, Optional, Any, Dict
 
 def l2_norm(input):
     input_size = input.size()
@@ -51,28 +54,32 @@ def calc_recall_at_k(T, Y, k):
 
 
 def predict_batchwise(model, dataloader):
-    device = "cuda"
+    '''
+        Predict on a batch
+        :return: list with N lists, where N = |{image, label, index}|
+    '''
+    # print(list(model.parameters())[0].device)
     model_is_training = model.training
     model.eval()
-    
     ds = dataloader.dataset
     A = [[] for i in range(len(ds[0]))]
     with torch.no_grad():
         # extract batches (A becomes list of samples)
-        for batch in tqdm(dataloader):
+        for batch in tqdm(dataloader, desc="Batch-wise prediction"):
             for i, J in enumerate(batch):
                 # i = 0: sz_batch * images
                 # i = 1: sz_batch * labels
                 # i = 2: sz_batch * indices
                 if i == 0:
                     # move images to device of model (approximate device)
-                    J = model(J.cuda())
-
+                    J = J.to(list(model.parameters())[0].device)
+                    # predict model output for image
+                    J = model(J).cpu()
                 for j in J:
+                    #if i == 1: print(j)
                     A[i].append(j)
     model.train()
     model.train(model_is_training) # revert to previous training state
-    
     return [torch.stack(A[i]) for i in range(len(A))]
 
 def proxy_init_calc(model, dataloader):
@@ -83,37 +90,64 @@ def proxy_init_calc(model, dataloader):
 
     return proxy_mean
 
+@torch.no_grad()
+def recall_at_ks(query_features: torch.Tensor,
+                 query_labels: torch.LongTensor,
+                 ks: List[int],
+                 gallery_features: Optional[torch.Tensor] = None,
+                 gallery_labels: Optional[torch.Tensor] = None,
+                 cosine: bool = True) -> (Any, Dict[int, float]):
+    """
+    More efficient way to compute the recall between samples at each k. This function uses about 8GB of memory.
+
+    """
+    nmi = None
+    offset = 0
+    if gallery_features is None and gallery_labels is None:
+        offset = 1
+        gallery_features = query_features
+        gallery_labels = query_labels
+    elif gallery_features is None or gallery_labels is None:
+        raise ValueError('gallery_features and gallery_labels needs to be both None or both Tensors.')
+
+    if cosine:
+        query_features = F.normalize(query_features, p=2, dim=1)
+        gallery_features = F.normalize(gallery_features, p=2, dim=1)
+
+    to_cpu_numpy = lambda x: x.cpu().numpy()
+    q_f, q_l, g_f, g_l = map(to_cpu_numpy, [query_features, query_labels, gallery_features, gallery_labels])
+
+    if hasattr(faiss, 'StandardGpuResources'):
+        res = faiss.StandardGpuResources()
+        flat_config = faiss.GpuIndexFlatConfig()
+        flat_config.device = 0
+
+        max_k = max(ks)
+        index_function = faiss.GpuIndexFlatIP if cosine else faiss.GpuIndexFlatL2
+        index = index_function(res, g_f.shape[1], flat_config)
+    else:
+        max_k = max(ks)
+        index_function = faiss.IndexFlatIP if cosine else faiss.IndexFlatL2
+        index = index_function(g_f.shape[1])
+    index.add(g_f)
+    closest_indices = index.search(q_f, max_k + offset)[1]
+
+    recalls = {}
+    for k in ks:
+        indices = closest_indices[:, offset:k + offset]
+        recalls[k] = (q_l[:, None] == g_l[indices]).any(1).mean()
+    return nmi, {k: round(v * 100, 2) for k, v in recalls.items()}
+
+
+
 def evaluate_cos(model, dataloader):
     nb_classes = dataloader.dataset.nb_classes()
 
     # calculate embeddings with model and get targets
-    X, T = predict_batchwise(model, dataloader)
-    X = l2_norm(X)
+    X, T, *_ = predict_batchwise(model, dataloader)
 
-    # get predictions by assigning nearest 8 neighbors with cosine
-    # K = 32
-    # Y = []
-    # xs = []
-    # cos_sim = F.linear(X, X)
-    # Y = T[cos_sim.topk(1 + K)[1][:,1:]]
-    # Y = Y.float().cpu()
-    #
-    # recall = []
-    # for k in [1, 2, 4, 8, 16, 32]:
-    #     r_at_k = calc_recall_at_k(T, Y, k)
-    #     recall.append(r_at_k)
-    #     print("R@{} : {:.3f}".format(k, 100 * r_at_k))
-    max_dist = max([1,2,4,8])
-    Y = assign_by_euclidian_at_k(X, T, max_dist)
-    Y = torch.from_numpy(Y)
-
-    # calculate recall @ 1, 2, 4, 8
-    recall = []
-    for k in [1,2,4,8]:
-        r_at_k = calc_recall_at_k(T, Y, k)
-        recall.append(r_at_k)
-        print("R@{} : {:.3f}".format(k, 100 * r_at_k))
-
+    nmi, recall = recall_at_ks(X, T, ks=[1, 2, 4, 8])
+    print("Recall@1,2,4,8 {:.3f}, {:.3f}, {:.3f}, {:.3f}".format(recall[1], recall[2], recall[4], recall[8]))
     return recall
 
 def evaluate_cos_Inshop(model, query_dataloader, gallery_dataloader):
