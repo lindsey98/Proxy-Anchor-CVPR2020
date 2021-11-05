@@ -9,6 +9,18 @@ import math
 import sklearn.metrics
 import faiss
 from typing import List, Optional, Any, Dict
+from map import *
+
+import faiss
+import numpy as np
+import sklearn.cluster
+import torch
+from sklearn.cluster import KMeans
+from sklearn.metrics.cluster import normalized_mutual_info_score
+import sklearn
+import sklearn.cluster
+import sklearn.metrics.cluster
+
 
 def l2_norm(input):
     input_size = input.size()
@@ -136,8 +148,79 @@ def recall_at_ks(query_features: torch.Tensor,
     for k in ks:
         indices = closest_indices[:, offset:k + offset]
         recalls[k] = (q_l[:, None] == g_l[indices]).any(1).mean()
-    return nmi, {k: round(v * 100, 2) for k, v in recalls.items()}
+    return {k: round(v * 100, 2) for k, v in recalls.items()}
 
+def mapr(X, T):
+    # MAP@R
+    label_counts = get_label_match_counts(T, T) # get R
+    # num_k = determine_k(
+    #     num_reference_embeddings=len(T), embeddings_come_from_same_source=True
+    # ) # equal to num_reference-1 (deduct itself)
+
+    num_k = max([count[1] for count in label_counts])
+    knn_indices = get_knn(
+        X, X, num_k, True
+    )
+
+    knn_labels = T[knn_indices] # get KNN indicies
+    map_R = mean_average_precision_at_r(knn_labels=knn_labels,
+                                        gt_labels=T[:, None],
+                                        embeddings_come_from_same_source=True,
+                                        label_counts=label_counts,
+                                        avg_of_avgs=False,
+                                        label_comparison_fn=torch.eq)
+    logging.info("MAP@R:{:.3f}".format(map_R * 100))
+
+    return map_R
+
+
+def mapr_inshop(X_query, T_query, X_gallery, T_gallery):
+    # MAP@R
+    label_counts = get_label_match_counts(T_query, T_gallery)  # get R
+    # num_k = determine_k(
+    #     num_reference_embeddings=len(T_gallery), embeddings_come_from_same_source=False
+    # )  # equal to num_reference
+    num_k = max([count[1] for count in label_counts])
+
+    knn_indices = get_knn(
+        X_gallery, X_query, num_k, True
+    )
+    knn_labels = T_gallery[knn_indices]  # get KNN indicies
+    map_R = mean_average_precision_at_r(knn_labels=knn_labels,
+                                        gt_labels=T_query[:, None],
+                                        embeddings_come_from_same_source=False,
+                                        label_counts=label_counts,
+                                        avg_of_avgs=False,
+                                        label_comparison_fn=torch.eq)
+    logging.info("MAP@R:{:.3f}".format(map_R * 100))
+    return map_R
+
+def cluster_by_kmeans(X, nb_clusters):
+    """
+    xs : embeddings with shape [nb_samples, nb_features]
+    nb_clusters : in this case, must be equal to number of classes
+    """
+     # return sklearn.cluster.MiniBatchKMeans(nb_clusters, batch_size=32).fit(X).labels_
+    X = X.detach().cpu().numpy()
+    kmeans = faiss.Kmeans(d=X.shape[1], k=nb_clusters)
+    kmeans.train(X.astype(np.float32))
+    labels = kmeans.index.search(X.astype(np.float32), 1)[1]
+    return np.squeeze(labels, 1)
+
+def calc_normalized_mutual_information(ys, xs_clustered):
+    return sklearn.metrics.cluster.normalized_mutual_info_score(xs_clustered, ys, average_method='geometric')
+
+
+def calc_nmi(X, T, nb_classes):
+    # calculate NMI with kmeans clustering
+    nmi = calc_normalized_mutual_information(
+        T,
+        cluster_by_kmeans(
+            X, nb_classes
+        )
+    )
+    print(nmi)
+    return nmi
 
 
 def evaluate_cos(model, dataloader):
@@ -146,84 +229,11 @@ def evaluate_cos(model, dataloader):
     # calculate embeddings with model and get targets
     X, T, *_ = predict_batchwise(model, dataloader)
 
-    nmi, recall = recall_at_ks(X, T, ks=[1, 2, 4, 8])
+    nmi = calc_nmi(X, T, nb_classes)
+    print(nmi)
+    recall = recall_at_ks(X, T, ks=[1, 2, 4, 8])
     print("Recall@1,2,4,8 {:.3f}, {:.3f}, {:.3f}, {:.3f}".format(recall[1], recall[2], recall[4], recall[8]))
+    map_r = mapr(X, T)
+    print(map_r)
     return recall
 
-def evaluate_cos_Inshop(model, query_dataloader, gallery_dataloader):
-    nb_classes = query_dataloader.dataset.nb_classes()
-    
-    # calculate embeddings with model and get targets
-    query_X, query_T = predict_batchwise(model, query_dataloader)
-    gallery_X, gallery_T = predict_batchwise(model, gallery_dataloader)
-    
-    query_X = l2_norm(query_X)
-    gallery_X = l2_norm(gallery_X)
-    
-    # get predictions by assigning nearest 8 neighbors with cosine
-    K = 50
-    Y = []
-    xs = []
-    
-    cos_sim = F.linear(query_X, gallery_X)
-
-    def recall_k(cos_sim, query_T, gallery_T, k):
-        m = len(cos_sim)
-        match_counter = 0
-
-        for i in range(m):
-            pos_sim = cos_sim[i][gallery_T == query_T[i]]
-            neg_sim = cos_sim[i][gallery_T != query_T[i]]
-
-            thresh = torch.max(pos_sim).item()
-
-            if torch.sum(neg_sim > thresh) < k:
-                match_counter += 1
-            
-        return match_counter / m
-    
-    # calculate recall @ 1, 2, 4, 8
-    recall = []
-    for k in [1, 10, 20, 30, 40, 50]:
-        r_at_k = recall_k(cos_sim, query_T, gallery_T, k)
-        recall.append(r_at_k)
-        print("R@{} : {:.3f}".format(k, 100 * r_at_k))
-                
-    return recall
-
-def evaluate_cos_SOP(model, dataloader):
-    nb_classes = dataloader.dataset.nb_classes()
-    
-    # calculate embeddings with model and get targets
-    X, T = predict_batchwise(model, dataloader)
-    X = l2_norm(X)
-    
-    # get predictions by assigning nearest 8 neighbors with cosine
-    K = 1000
-    Y = []
-    xs = []
-    for x in X:
-        if len(xs)<10000:
-            xs.append(x)
-        else:
-            xs.append(x)            
-            xs = torch.stack(xs,dim=0)
-            cos_sim = F.linear(xs,X)
-            y = T[cos_sim.topk(1 + K)[1][:,1:]]
-            Y.append(y.float().cpu())
-            xs = []
-            
-    # Last Loop
-    xs = torch.stack(xs,dim=0)
-    cos_sim = F.linear(xs,X)
-    y = T[cos_sim.topk(1 + K)[1][:,1:]]
-    Y.append(y.float().cpu())
-    Y = torch.cat(Y, dim=0)
-
-    # calculate recall @ 1, 2, 4, 8
-    recall = []
-    for k in [1, 10, 100, 1000]:
-        r_at_k = calc_recall_at_k(T, Y, k)
-        recall.append(r_at_k)
-        print("R@{} : {:.3f}".format(k, 100 * r_at_k))
-    return recall

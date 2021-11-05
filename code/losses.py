@@ -110,11 +110,42 @@ class TripletLoss(nn.Module):
         return loss
     
 class NPairLoss(nn.Module):
-    def __init__(self, l2_reg=0):
+    def __init__(self):
         super(NPairLoss, self).__init__()
-        self.l2_reg = l2_reg
-        self.loss_func = losses.NPairsLoss(l2_reg_weight=self.l2_reg, normalize_embeddings = False)
+        self.loss_func = losses.NPairsLoss()
         
+    def forward(self, embeddings, labels):
+        loss = self.loss_func(embeddings, labels)
+        return loss
+
+
+class CircleLoss(nn.Module):
+    def __init__(self):
+        super(CircleLoss, self).__init__()
+        self.loss_func = losses.CircleLoss()
+
+    def forward(self, embeddings, labels):
+        loss = self.loss_func(embeddings, labels)
+        return loss
+
+class ArcFaceLoss(nn.Module):
+    def __init__(self, nb_classes, sz_embed):
+        super(ArcFaceLoss, self).__init__()
+        self.nb_classes = nb_classes
+        self.sz_embed = sz_embed
+        self.loss_func = losses.ArcFaceLoss(self.nb_classes, self.sz_embed)
+
+    def forward(self, embeddings, labels):
+        loss = self.loss_func(embeddings, labels)
+        return loss
+
+class CosFaceLoss(nn.Module):
+    def __init__(self, nb_classes, sz_embed):
+        super(CosFaceLoss, self).__init__()
+        self.nb_classes = nb_classes
+        self.sz_embed = sz_embed
+        self.loss_func = losses.CosFaceLoss(self.nb_classes, self.sz_embed)
+
     def forward(self, embeddings, labels):
         loss = self.loss_func(embeddings, labels)
         return loss

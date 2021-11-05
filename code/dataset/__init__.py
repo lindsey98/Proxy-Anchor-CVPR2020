@@ -3,7 +3,7 @@ from .cub import CUBirds
 from .SOP import SOP
 from .import utils
 from .base import BaseDataset
-from .logo2k import Logo2K, Logo2K_super
+from .logo2k import Logo2K
 
 
 _type = {
@@ -11,8 +11,6 @@ _type = {
     'cub': CUBirds,
     'SOP': SOP,
     'logo2k': Logo2K,
-    'logo2k_super100': Logo2K_super,
-    'logo2k_super500': Logo2K_super,
 }
 
 def load(name, root, mode, transform = None):

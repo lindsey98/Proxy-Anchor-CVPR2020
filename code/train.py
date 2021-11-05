@@ -39,13 +39,13 @@ parser.add_argument('--bn-freeze', default = 1, type = int,help = 'Batch normali
 parser.add_argument('--l2-norm', default = 1, type = int,help = 'L2 normlization')
 parser.add_argument('--remark', default = '', help = 'Any reamrk')
 
-parser.add_argument('--LOG_DIR', default='../logs/cars_512', help = 'Path to log folder')
+parser.add_argument('--LOG_DIR', default='../logs/logo2k_512', help = 'Path to log folder')
 parser.add_argument('--batch-size', default = 32, type = int,dest = 'sz_batch',help = 'Number of samples per batch.')
-parser.add_argument('--dataset', default='cars', help = 'Training dataset, e.g. cub, cars, SOP, Inshop, logo2k')
+parser.add_argument('--dataset', default='logo2k', help = 'Training dataset, e.g. cub, cars, SOP, Inshop, logo2k')
 parser.add_argument('--data_root', default='/home/ruofan/PycharmProjects/ProxyNCA-/mnt/datasets/')
 parser.add_argument('--embedding-size', default = 512, type = int, dest = 'sz_embedding',help = 'Size of embedding that is appended to backbone model.')
 parser.add_argument('--model', default = 'resnet50', help = 'Model for training')
-parser.add_argument('--loss', default = 'Proxy_Anchor', help = 'Criterion for training')
+parser.add_argument('--loss', default = 'MS', help = 'Criterion for training')
 parser.add_argument('--gpu-id', default = 1, type = int, help = 'ID of GPU that is used for training. -1 means use all')
 parser.add_argument('--lr', default = 1e-5, type =float, help = 'Learning rate setting')
 
@@ -183,6 +183,12 @@ elif args.loss == 'Triplet':
     criterion = losses.TripletLoss().cuda()
 elif args.loss == 'NPair':
     criterion = losses.NPairLoss().cuda()
+elif args.loss == 'Circle':
+    criterion = losses.CircleLoss().cuda()
+elif args.loss == 'ArcFace':
+    criterion = losses.ArcFaceLoss(nb_classes, args.sz_embedding).cuda()
+elif args.loss == 'CosFace':
+    criterion = losses.CosFaceLoss(nb_classes, args.sz_embedding).cuda()
 
 # Train Parameters
 param_groups = [
@@ -191,7 +197,10 @@ param_groups = [
     {'params': model.model.embedding.parameters() if args.gpu_id != -1 else model.module.model.embedding.parameters(), 'lr':float(args.lr) * 1},
 ]
 if args.loss == 'Proxy_Anchor':
-    param_groups.append({'params': criterion.proxies, 'lr':float(args.lr) * 100})
+    param_groups.append({'params': criterion.proxies, 'lr': float(args.lr) * 100})
+# elif args.loss == 'ArcFace' or 'CosFace':
+#     param_groups.append({'params': criterion.proxies(), 'lr': 0.01})
+
 print(param_groups[-1]['lr'])
 
 # Optimizer Setting
